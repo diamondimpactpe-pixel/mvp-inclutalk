@@ -1,0 +1,43 @@
+# FastAPI & Server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+websockets==12.0
+
+# Database
+sqlalchemy==2.0.25
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.2 #4.0.1
+pydantic[email]==2.5.3
+
+# AI/ML
+tensorflow==2.15.0
+keras==2.15.0
+mediapipe==0.10.9
+opencv-python-headless==4.9.0.80
+numpy==1.26.3
+scikit-learn==1.4.0
+
+# Speech (Whisper integration)
+#openai-whisper==20231117
+soundfile==0.12.1
+
+# Redis (optional for rate limiting)
+redis==5.0.1
+aioredis==2.0.1
+
+# Utils
+python-dotenv==1.0.0
+pydantic-settings==2.1.0
+slowapi==0.1.9
+
+# CORS
+#python-cors==1.0.0
+fastapi-cors==0.0.6
+

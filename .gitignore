@@ -1,0 +1,79 @@
+# -----------------------------
+# ENV / Secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+
+# -----------------------------
+# Node / Frontend (Vite/React)
+# -----------------------------
+node_modules/
+**/node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------
+# Python / Backend (FastAPI)
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+*.log
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+env/
+
+# -----------------------------
+# Alembic / DB
+# -----------------------------
+# (SI tus migraciones se versionan, NO ignores alembic/versions)
+# Si generas cosas temporales:
+alembic/__pycache__/
+
+# -----------------------------
+# Docker
+# -----------------------------
+*.pid
+docker-compose.override.yml
+
+# -----------------------------
+# OS / Editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+.idea/
+*.swp
+*.swo
+
+# -----------------------------
+# Uploads / Temp (si aplica)
+# -----------------------------
+uploads/
+tmp/
+temp/
