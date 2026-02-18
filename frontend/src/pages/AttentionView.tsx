@@ -4,10 +4,13 @@ import { useNavigate } from 'react-router-dom';
 type Turn = 'operator' | 'user-choice' | 'user-signs' | 'user-text' | 'playback';
 type SpeechRecWin = typeof window & { webkitSpeechRecognition?: any; SpeechRecognition?: any };
 
-const LSP_WORDS = [
-  'SABER','COMPRAR','PAGAR','RECIBO','DEVOLVER','CONSULTAR','HORARIO',
-  'ATENCIÓN','RESERVAR','LIBROS',
-];
+const LSP_WORDS = ['SABER','COMPRAR','PAGAR','RECIBO','DEVOLVER','CONSULTAR','HORARIO','ATENCIÓN','RESERVAR','LIBROS'];
+const FRAMES_PER_SEQ = 30;
+const FPS_FOR_TS = 30;
+const MIN_FRAMES = 8;
+const SEQ_SECONDS = 2.0;
+const API_BASE = 'http://localhost:8000';
+const SHOW_CONFIDENCE = false;
 
 function speakText(text: string, onEnd?: () => void) {
   if (!('speechSynthesis' in window)) { onEnd?.(); return; }
@@ -18,17 +21,37 @@ function speakText(text: string, onEnd?: () => void) {
   window.speechSynthesis.speak(utt);
 }
 
+function extractKeypoints126(results: any): number[] {
+  const zeros63 = new Array(63).fill(0);
+  const outLeft = [...zeros63];
+  const outRight = [...zeros63];
+
+  const lms = results?.multiHandLandmarks ?? [];
+  const handed = results?.multiHandedness ?? [];
+
+  for (let i = 0; i < lms.length; i++) {
+    const label = handed?.[i]?.label; // "Left" or "Right"
+    const vec63 = lms[i].flatMap((lm: any) => [lm.x ?? 0, lm.y ?? 0, lm.z ?? 0]);
+
+    if (label === 'Left') for (let k = 0; k < 63; k++) outLeft[k] = vec63[k];
+    else if (label === 'Right') for (let k = 0; k < 63; k++) outRight[k] = vec63[k];
+    else {
+      // fallback si no hay label
+      if (i === 0) for (let k = 0; k < 63; k++) outLeft[k] = vec63[k];
+      if (i === 1) for (let k = 0; k < 63; k++) outRight[k] = vec63[k];
+    }
+  }
+
+  return [...outLeft, ...outRight];
+}
+
 export const AttentionView: React.FC = () => {
   const navigate = useNavigate();
   const [turn, setTurn] = useState<Turn>('operator');
-
-  // Operador
   const [isRecording, setIsRecording] = useState(false);
   const [operatorText, setOperatorText] = useState('');
   const [sttError, setSttError] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
-
-  // Señas
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -37,23 +60,18 @@ export const AttentionView: React.FC = () => {
   const [handDetected, setHandDetected] = useState(false);
   const handDetectedRef = useRef(false);
   const [signsPhase, setSignsPhase] = useState<'idle'|'detected'|'recording'|'classifying'|'done'>('idle');
-  const signsPhaseRef = useRef<string>('idle');
+  const signsPhaseRef = useRef<'idle'|'detected'|'recording'|'classifying'|'done'>('idle');
   const [countdown, setCountdown] = useState(3);
   const [builtPhrase, setBuiltPhrase] = useState<string[]>([]);
   const [lastWord, setLastWord] = useState('');
   const [lastConfidence, setLastConfidence] = useState<number>(0);
-  const lastKeypointsRef = useRef<any[]>([]); // keypoints reales del último frame
+  const recordedFramesRef = useRef<number[][]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout>|null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval>|null>(null);
-
-  // Texto
   const [userText, setUserText] = useState('');
-
-  // Playback
   const [playbackText, setPlaybackText] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // ── STT ────────────────────────────────────────────────────────────────────
   const SpeechRecCtor = useMemo(() => {
     const w = window as unknown as SpeechRecWin;
     return w.SpeechRecognition || w.webkitSpeechRecognition;
@@ -69,7 +87,7 @@ export const AttentionView: React.FC = () => {
       setOperatorText(txt.trim());
     };
     rec.onerror = (e: any) => {
-      setSttError(e?.error === 'not-allowed' ? 'Permiso de micrófono denegado.' : 'Error de voz. Intenta de nuevo.');
+      setSttError(e?.error === 'not-allowed' ? 'Permiso de micrófono denegado.' : 'Error de voz.');
       setIsRecording(false);
     };
     rec.onend = () => setIsRecording(false);
@@ -85,7 +103,6 @@ export const AttentionView: React.FC = () => {
     } else { recognitionRef.current?.stop(); setIsRecording(false); }
   };
 
-  // ── MediaPipe ──────────────────────────────────────────────────────────────
   const loadMP = useCallback((): Promise<any> => {
     if ((window as any).Hands) return Promise.resolve((window as any).Hands);
     return new Promise((resolve, reject) => {
@@ -107,9 +124,7 @@ export const AttentionView: React.FC = () => {
     canvas.height = video.videoHeight || 480;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!results.multiHandLandmarks?.length) return;
-    const conns = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
-      [0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],
-      [0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]];
+    const conns = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]];
     for (const lms of results.multiHandLandmarks) {
       ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2.5;
       for (const [a, b] of conns) {
@@ -127,7 +142,83 @@ export const AttentionView: React.FC = () => {
     }
   }, []);
 
+  const cancelCountdown = useCallback(() => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
+    recordedFramesRef.current = [];
+    signsPhaseRef.current = 'idle';
+    setSignsPhase('idle');
+    setCountdown(3);
+  }, []);
+
+  const classifySequence = useCallback(async () => {
+    const frames126 = recordedFramesRef.current;
+    if (frames126.length < MIN_FRAMES) {
+      setSttError(`Muy pocos frames (${frames126.length}). Mantén la seña más estable.`);
+      signsPhaseRef.current = 'idle';
+      setSignsPhase('idle');
+      recordedFramesRef.current = [];
+      return;
+    }
+    let seq = frames126;
+    if (seq.length > FRAMES_PER_SEQ) seq = seq.slice(seq.length - FRAMES_PER_SEQ);
+    if (seq.length < FRAMES_PER_SEQ) {
+      const last = seq[seq.length - 1] ?? new Array(126).fill(0);
+      while (seq.length < FRAMES_PER_SEQ) seq = [...seq, last];
+    }
+
+    // ✅ CRÍTICO: convertir [126] al formato del schema backend
+    const framesPayload = seq.map((kp126, i) => {
+      const left = [], right = [];
+      for (let j = 0; j < 21; j++) {
+        left.push({ x: kp126[j*3], y: kp126[j*3+1], z: kp126[j*3+2] });
+      }
+      for (let j = 0; j < 21; j++) {
+        right.push({ x: kp126[63+j*3], y: kp126[63+j*3+1], z: kp126[63+j*3+2] });
+      }
+      return {
+        timestamp: i / FPS_FOR_TS,
+        left_hand_landmarks: left,
+        right_hand_landmarks: right,
+      };
+    });
+
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`${API_BASE}/api/v1/lsp/predict`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ frames: framesPayload }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        console.error('❌ Backend error:', res.status, txt);
+        throw new Error(`Backend ${res.status}: ${txt}`);
+      }
+      const data = await res.json();
+      const label = data?.label ?? 'UNKNOWN';
+      const confidence = data?.confidence ?? 0;
+      console.log(`✅ Detectado: ${label} (${Math.round(confidence*100)}%)`);
+      setLastWord(label);
+      setLastConfidence(Math.round(confidence * 100));
+      setBuiltPhrase(prev => [...prev, label]);
+      signsPhaseRef.current = 'done';
+      setSignsPhase('done');
+    } catch (e) {
+      console.error('❌ Error en clasificación:', e);
+      setSttError('Error al clasificar la seña. Revisa consola / backend.');
+      signsPhaseRef.current = 'idle';
+      setSignsPhase('idle');
+    } finally {
+      recordedFramesRef.current = [];
+    }
+  }, []);
+
   const startDetectionCountdown = useCallback(() => {
+    setSttError(null);
     signsPhaseRef.current = 'detected';
     setSignsPhase('detected');
     setCountdown(3);
@@ -137,47 +228,22 @@ export const AttentionView: React.FC = () => {
       setCountdown(c);
       if (c <= 0) {
         clearInterval(countdownRef.current!);
-        if (handDetectedRef.current) {
-          signsPhaseRef.current = 'recording';
-          setSignsPhase('recording');
-          recordingTimerRef.current = setTimeout(() => {
-            signsPhaseRef.current = 'classifying';
-            setSignsPhase('classifying');
-            // Keypoints reales capturados por MediaPipe ✅
-            const kp = lastKeypointsRef.current;
-            console.log(`📊 Keypoints reales capturados: ${kp.length} mano(s), ${kp[0]?.length ?? 0} landmarks`);
-            console.log('🔬 Para integración real, enviar al endpoint /api/v1/lsp/predict');
-            // ─── TODO (producción) ───────────────────────────────────────
-            // const res = await fetch('/api/v1/lsp/predict', {
-            //   method: 'POST',
-            //   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            //   body: JSON.stringify({ frames: [kp] })
-            // });
-            // const { label, confidence } = await res.json();
-            // ────────────────────────────────────────────────────────────
-            setTimeout(() => {
-              // DEMO: resultado aleatorio (confianza baja = honesto que no está entrenado)
-              const word = LSP_WORDS[Math.floor(Math.random() * LSP_WORDS.length)];
-              const demoConf = 40 + Math.floor(Math.random() * 26); // 40–65%
-              setLastWord(word);
-              setLastConfidence(demoConf);
-              setBuiltPhrase(prev => [...prev, word]);
-              signsPhaseRef.current = 'done';
-              setSignsPhase('done');
-            }, 800);
-          }, 2000);
+        if (!handDetectedRef.current) {
+          signsPhaseRef.current = 'idle';
+          setSignsPhase('idle');
+          return;
         }
+        recordedFramesRef.current = [];
+        signsPhaseRef.current = 'recording';
+        setSignsPhase('recording');
+        recordingTimerRef.current = setTimeout(async () => {
+          signsPhaseRef.current = 'classifying';
+          setSignsPhase('classifying');
+          await classifySequence();
+        }, Math.floor(SEQ_SECONDS * 1000));
       }
     }, 1000);
-  }, []);
-
-  const cancelCountdown = useCallback(() => {
-    if (countdownRef.current) clearInterval(countdownRef.current);
-    if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current);
-    signsPhaseRef.current = 'idle';
-    setSignsPhase('idle');
-    setCountdown(3);
-  }, []);
+  }, [classifySequence]);
 
   const initMP = useCallback(async () => {
     try {
@@ -188,16 +254,17 @@ export const AttentionView: React.FC = () => {
       hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.5 });
       hands.onResults((results: any) => {
         drawLandmarks(results);
-        // Guardar keypoints reales para cuando el modelo esté listo
-        if (results.multiHandLandmarks?.length) {
-          lastKeypointsRef.current = results.multiHandLandmarks;
-        }
-        const det = results.multiHandLandmarks?.length > 0;
+        const det = !!results.multiHandLandmarks?.length;
         if (det !== handDetectedRef.current) {
           handDetectedRef.current = det;
           setHandDetected(det);
           if (det && signsPhaseRef.current === 'idle') startDetectionCountdown();
-          if (!det && ['detected','recording'].includes(signsPhaseRef.current)) cancelCountdown();
+          if (!det && (signsPhaseRef.current === 'detected' || signsPhaseRef.current === 'recording')) cancelCountdown();
+        }
+        if (signsPhaseRef.current === 'recording') {
+          const vec126 = extractKeypoints126(results);
+          recordedFramesRef.current.push(vec126);
+          if (recordedFramesRef.current.length > FRAMES_PER_SEQ * 2) recordedFramesRef.current.shift();
         }
       });
       handsRef.current = hands;
@@ -210,6 +277,7 @@ export const AttentionView: React.FC = () => {
       animFrameRef.current = requestAnimationFrame(loop);
     } catch (e) {
       console.error('MediaPipe error:', e);
+      setSttError('Error cargando MediaPipe Hands.');
     }
   }, [loadMP, drawLandmarks, startDetectionCountdown, cancelCountdown]);
 
@@ -225,9 +293,15 @@ export const AttentionView: React.FC = () => {
   }, [cancelCountdown]);
 
   const openCamera = useCallback(async () => {
+    setSttError(null);
     setTurn('user-signs');
-    setSignsPhase('idle'); signsPhaseRef.current = 'idle';
-    setBuiltPhrase([]); setHandDetected(false); handDetectedRef.current = false; setCountdown(3);
+    signsPhaseRef.current = 'idle';
+    setSignsPhase('idle');
+    setBuiltPhrase([]);
+    setHandDetected(false);
+    handDetectedRef.current = false;
+    setCountdown(3);
+    recordedFramesRef.current = [];
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
       streamRef.current = stream;
@@ -260,7 +334,6 @@ export const AttentionView: React.FC = () => {
 
   useEffect(() => () => { recognitionRef.current?.stop(); stopCamera(); window.speechSynthesis?.cancel(); }, [stopCamera]);
 
-  // ── RENDER ──────────────────────────────────────────────────────────────────
   const sp = (bg: string, color: string): React.CSSProperties => ({
     background: bg, color, border: `1px solid ${color}55`,
     borderRadius: 10, padding: '8px 16px', fontSize: 14, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -274,10 +347,7 @@ export const AttentionView: React.FC = () => {
         <span style={S.pill}>● Sesión activa</span>
         <button style={S.endBtn} onClick={() => navigate('/dashboard')}>Finalizar sesión</button>
       </header>
-
       <main style={S.main}>
-
-        {/* OPERADOR */}
         {turn === 'operator' && (
           <div style={S.card} className="it-in">
             <div style={S.stepRow}>
@@ -287,9 +357,7 @@ export const AttentionView: React.FC = () => {
             <div style={{...S.icoCircle, background:'#e8f5ee'}}><span style={{fontSize:44}}>🎤</span></div>
             <p style={S.hint}>{isRecording ? 'Grabando… presiona para detener' : 'Presiona el botón para empezar a hablar'}</p>
             <div style={{...S.display, borderColor: isRecording ? '#2cb87a' : '#e5e7eb'}}>
-              {operatorText
-                ? <p style={S.bigTxt}>{operatorText}</p>
-                : <p style={S.ph}>El texto aparecerá aquí mientras hablas…</p>}
+              {operatorText ? <p style={S.bigTxt}>{operatorText}</p> : <p style={S.ph}>El texto aparecerá aquí mientras hablas…</p>}
             </div>
             {sttError && <p style={S.errTxt}>{sttError}</p>}
             <button style={{...S.micBtn, ...(isRecording ? S.micOn : {})}} onClick={toggleMic}>
@@ -301,8 +369,6 @@ export const AttentionView: React.FC = () => {
             </div>
           </div>
         )}
-
-        {/* USUARIO - ELECCIÓN */}
         {turn === 'user-choice' && (
           <div style={S.card} className="it-in">
             <div style={S.stepRow}>
@@ -322,59 +388,50 @@ export const AttentionView: React.FC = () => {
                 <span style={{fontSize:22,fontWeight:700,color:'#166534'}}>Responder con Señas</span>
                 <span style={{fontSize:14,color:'#6b7280'}}>Activa la cámara — Lenguaje LSP</span>
               </button>
-              <button style={S.choiceSec} onClick={() => setTurn('user-text')}>
-                ⌨️ &nbsp;Escribir respuesta
-              </button>
+              <button style={S.choiceSec} onClick={() => setTurn('user-text')}>⌨️ &nbsp;Escribir respuesta</button>
             </div>
           </div>
         )}
-
-        {/* SEÑAS */}
         {turn === 'user-signs' && (
           <div style={{...S.card, maxWidth:860}} className="it-in">
             <div style={S.stepRow}>
               <span style={{...S.stepN, background:'#1a7fb5'}}>2</span>
               <span style={S.stepL}>Captura de Señas LSP</span>
             </div>
-
-            {/* Banner modelo demo honesto */}
             <div style={S.demoBanner}>
-              <span style={{fontSize:18}}>🔬</span>
+              <span style={{fontSize:18}}>✅</span>
               <div>
-                <p style={{margin:0,fontWeight:700,fontSize:14,color:'#92400e'}}>Modo demo — Detección de manos REAL ✅</p>
-                <p style={{margin:0,fontSize:13,color:'#b45309'}}>MediaPipe detecta tus manos correctamente. La <b>clasificación de señas LSP</b> es demo hasta que el modelo LSTM sea entrenado con datos reales.</p>
+                <p style={{margin:0,fontWeight:700,fontSize:14,color:'#166534'}}>Modelo LSP activo</p>
+                <p style={{margin:0,fontSize:13,color:'#15803d'}}>MediaPipe + LSTM entrenado. Vocabulario: {LSP_WORDS.join(', ')}</p>
               </div>
             </div>
+            {sttError && <p style={S.errTxt}>{sttError}</p>}
             <div style={{display:'flex',gap:20,width:'100%',flexWrap:'wrap',alignItems:'flex-start'}}>
-              {/* Cámara */}
               <div style={S.camBox}>
                 <video ref={videoRef} autoPlay playsInline muted style={S.video}/>
                 <canvas ref={canvasRef} style={S.canvas}/>
                 <div style={S.hFrame}/>
                 <div style={{position:'absolute',bottom:12,left:12,right:12,textAlign:'center'}}>
-                  {signsPhase==='idle' && <span style={sp('#fff8e1','#92400e')}>👋 Coloca tus manos en el recuadro</span>}
+                  {signsPhase==='idle' && <span style={sp('#fff8e1','#92400e')}>👋 Coloca tus manos</span>}
                   {signsPhase==='detected' && (
                     <div style={{background:'rgba(0,0,0,.75)',borderRadius:14,padding:14,display:'flex',flexDirection:'column',alignItems:'center',gap:8}}>
                       <span style={sp('#f0fdf4','#166534')}>✅ ¡Manos detectadas!</span>
                       <span style={{fontSize:56,fontWeight:800,color:'#4ade80',lineHeight:1}}>{countdown}</span>
-                      <div style={{width:'80%',height:6,background:'rgba(255,255,255,.2)',borderRadius:3,overflow:'hidden'}}>
-                        <div style={{height:'100%',background:'linear-gradient(90deg,#4ade80,#22d3ee)',borderRadius:3,transition:'width .9s linear',width:`${((3-countdown)/3)*100}%`}}/>
-                      </div>
-                      <p style={{color:'#fff',fontSize:13,margin:0,fontWeight:600}}>Mantén la seña {countdown}s…</p>
+                      <p style={{color:'#fff',fontSize:13,margin:0,fontWeight:600}}>Mantén la seña…</p>
                     </div>
                   )}
-                  {signsPhase==='recording' && <span style={sp('#fef3f3','#991b1b')}><span className="it-blink">⏺</span> Grabando seña…</span>}
+                  {signsPhase==='recording' && <span style={sp('#fef3f3','#991b1b')}><span className="it-blink">⏺</span> Grabando ({recordedFramesRef.current.length} frames)…</span>}
                   {signsPhase==='classifying' && <span style={sp('#f0f9ff','#0369a1')}>🧠 Interpretando…</span>}
                 </div>
               </div>
-              {/* Panel */}
               <div style={{flex:'1 1 180px',display:'flex',flexDirection:'column',gap:14,minWidth:180}}>
                 <div style={{background:'#f9fafb',borderRadius:14,padding:16,border:'1px solid #e5e7eb',minHeight:90}}>
                   <p style={{fontSize:12,color:'#9ca3af',margin:'0 0 10px',fontWeight:700,textTransform:'uppercase',letterSpacing:.5}}>Frase detectada:</p>
-                  {builtPhrase.length>0
-                    ? <div style={{display:'flex',flexWrap:'wrap',gap:8}}>{builtPhrase.map((w,i)=><span key={i} style={{background:'#dcfce7',color:'#166534',border:'1px solid #bbf7d0',borderRadius:8,padding:'5px 12px',fontSize:15,fontWeight:700}}>{w}</span>)}</div>
-                    : <p style={{color:'#c0cdd6',fontSize:14,margin:0,fontStyle:'italic'}}>Las palabras aparecerán aquí…</p>
-                  }
+                  {builtPhrase.length>0 ? (
+                    <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                      {builtPhrase.map((w,i)=><span key={i} style={{background:'#dcfce7',color:'#166534',border:'1px solid #bbf7d0',borderRadius:8,padding:'5px 12px',fontSize:15,fontWeight:700}}>{w}</span>)}
+                    </div>
+                  ) : <p style={{color:'#c0cdd6',fontSize:14,margin:0,fontStyle:'italic'}}>Las palabras aparecerán aquí…</p>}
                 </div>
                 {signsPhase==='done' && (
                   <div style={{display:'flex',flexDirection:'column',gap:10}}>
@@ -382,17 +439,15 @@ export const AttentionView: React.FC = () => {
                       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
                         <span style={{fontSize:13,color:'#6b7280'}}>Detectada:</span>
                         <span style={{background:'#2cb87a',color:'#fff',borderRadius:8,padding:'3px 12px',fontSize:15,fontWeight:700}}>{lastWord}</span>
-                      </div>
-                      {/* Barra de confianza honesta */}
-                      <div style={{display:'flex',alignItems:'center',gap:8}}>
-                        <span style={{fontSize:12,color:'#9ca3af',whiteSpace:'nowrap'}}>Confianza:</span>
-                        <div style={{flex:1,height:6,background:'#e5e7eb',borderRadius:3,overflow:'hidden'}}>
-                          <div style={{height:'100%',width:`${lastConfidence}%`,background:lastConfidence>70?'#22c55e':lastConfidence>50?'#f59e0b':'#ef4444',borderRadius:3,transition:'width .5s ease'}}/>
+                      </div> 
+                      {SHOW_CONFIDENCE && (
+                        <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <span style={{fontSize:12,color:'#9ca3af',whiteSpace:'nowrap'}}>Confianza:</span>
+                          <div style={{flex:1,height:6,background:'#e5e7eb',borderRadius:3,overflow:'hidden'}}>
+                            <div style={{height:'100%',width:`${lastConfidence}%`,background:lastConfidence>70?'#22c55e':lastConfidence>50?'#f59e0b':'#ef4444',borderRadius:3,transition:'width .5s ease'}}/>
+                          </div>
+                          <span style={{fontSize:12,fontWeight:700}}>{lastConfidence}%</span>
                         </div>
-                        <span style={{fontSize:12,fontWeight:700,color:lastConfidence>70?'#166534':lastConfidence>50?'#92400e':'#991b1b'}}>{lastConfidence}%</span>
-                      </div>
-                      {lastConfidence < 65 && (
-                        <p style={{fontSize:11,color:'#b45309',margin:'6px 0 0',fontStyle:'italic'}}>⚠️ Demo: modelo no entrenado. La confianza real mejorará con el dataset LSP.</p>
                       )}
                     </div>
                     <button style={S.ghost} onClick={() => {setBuiltPhrase(p=>p.slice(0,-1)); signsPhaseRef.current='idle'; setSignsPhase('idle'); setCountdown(3);}}>↩ Borrar última</button>
@@ -406,18 +461,16 @@ export const AttentionView: React.FC = () => {
                     <ol style={{fontSize:13,color:'#6b7280',margin:0,paddingLeft:18,lineHeight:1.9}}>
                       <li>Coloca tus manos en el recuadro</li>
                       <li>Espera la cuenta regresiva (3s)</li>
-                      <li>Mantén la seña 2 segundos</li>
+                      <li>Mantén la seña ~2 segundos</li>
                       <li>Confirma o repite</li>
                     </ol>
                   </div>
                 )}
               </div>
             </div>
-            <button style={{background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:14,fontFamily:'inherit',textDecoration:'underline'}} onClick={()=>{stopCamera();setTurn('user-choice');}}>← Volver a opciones</button>
+            <button style={{background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:14,fontFamily:'inherit',textDecoration:'underline'}} onClick={() => { stopCamera(); setTurn('user-choice'); }}>← Volver a opciones</button>
           </div>
         )}
-
-        {/* TEXTO */}
         {turn === 'user-text' && (
           <div style={S.card} className="it-in">
             <div style={S.stepRow}>
@@ -432,69 +485,29 @@ export const AttentionView: React.FC = () => {
             </div>
           </div>
         )}
-
-        {/* PLAYBACK */}
         {turn === 'playback' && (
           <div style={S.card} className="it-in">
             <div style={S.stepRow}>
               <span style={{...S.stepN, background:'#7c3aed'}}>3</span>
               <span style={S.stepL}>Respuesta del Usuario</span>
             </div>
-
-            {/* Ícono de altavoz — clickeable para repetir */}
-            <button
-              title="Repetir en voz alta"
-              style={{
-                ...S.icoCircle,
-                background: isSpeaking ? '#ede9fe' : '#f3eeff',
-                border: isSpeaking ? '2px solid #a78bfa' : '2px solid transparent',
-                cursor: 'pointer',
-                transition: 'all .2s',
-                position: 'relative',
-              }}
-              onClick={() => {
-                if (!isSpeaking) {
-                  setIsSpeaking(true);
-                  speakText(playbackText, () => setIsSpeaking(false));
-                }
-              }}
-            >
+            <button title="Repetir" style={{...S.icoCircle, background: isSpeaking ? '#ede9fe' : '#f3eeff', border: isSpeaking ? '2px solid #a78bfa' : '2px solid transparent', cursor: 'pointer', transition: 'all .2s'}} onClick={() => { if (!isSpeaking) { setIsSpeaking(true); speakText(playbackText, () => setIsSpeaking(false)); }}}>
               <span style={{fontSize:44}}>{isSpeaking ? '🔊' : '🔈'}</span>
-               
             </button>
-
-            {/* Texto del usuario */}
-            <div style={S.pbBox}>
-              <p style={S.pbTxt}>"{playbackText}"</p>
-            </div>
-
-            {/* Estado: hablando / botón continuar */}
+            <div style={S.pbBox}><p style={S.pbTxt}>"{playbackText}"</p></div>
             {isSpeaking ? (
               <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12}}>
                 <div style={{display:'flex',alignItems:'center',gap:5,height:48}}>
-                  {[0,1,2,3,4,3,2,1].map((d,i) => (
-                    <div key={i} style={{
-                      width:6, height:8, background:'#7c3aed', borderRadius:3,
-                      animation:`it-wave .7s ease-in-out ${i*.1}s infinite`,
-                      opacity:.3+d*.1,
-                    }}/>
-                  ))}
+                  {[0,1,2,3,4,3,2,1].map((d,i) => <div key={i} style={{width:6, height:8, background:'#7c3aed', borderRadius:3, animation:`it-wave .7s ease-in-out ${i*.1}s infinite`, opacity:.3+d*.1}}/>)}
                 </div>
-                <p style={{color:'#7c3aed',fontSize:17,fontWeight:600,margin:0}}>
-                  Leyendo en voz alta…
-                </p>
+                <p style={{color:'#7c3aed',fontSize:17,fontWeight:600,margin:0}}>Leyendo en voz alta…</p>
               </div>
             ) : (
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12,width:'100%'}}>
-                <button style={S.contBtn} onClick={handleContinue}>
-                  ↩ Continuar conversación
-                </button>
-              </div>
+              <button style={S.contBtn} onClick={handleContinue}>↩ Continuar conversación</button>
             )}
           </div>
         )}
       </main>
-
       <footer style={S.footer}>
         <div style={{display:'flex',alignItems:'center',gap:10}}>
           {[
@@ -503,7 +516,7 @@ export const AttentionView: React.FC = () => {
             {l:'3. Respuesta',a:turn==='playback',c:'#7c3aed'},
           ].map((t,i)=>(
             <React.Fragment key={i}>
-              {i>0&&<div style={{width:48,height:2,borderRadius:1,background:t.a?t.c:'#d1d5db',transition:'background .4s'}}/>}
+              {i>0 && <div style={{width:48,height:2,borderRadius:1,background:t.a?t.c:'#d1d5db',transition:'background .4s'}}/>}
               <div style={{display:'flex',alignItems:'center',gap:6}}>
                 <div style={{width:12,height:12,borderRadius:'50%',background:t.a?t.c:'#d1d5db',transition:'background .4s'}}/>
                 <span style={{fontSize:13,fontWeight:600,color:t.a?t.c:'#9ca3af'}}>{t.l}</span>
@@ -532,7 +545,7 @@ const S: Record<string, React.CSSProperties> = {
   display: { width:'100%', minHeight:200, background:'#f9fafb', border:'2px solid #e5e7eb', borderRadius:16, padding:'24px 32px', display:'flex', alignItems:'center', justifyContent:'center', transition:'border-color .3s' },
   bigTxt: { fontSize:38, fontWeight:700, color:'#111827', textAlign:'center', margin:0, lineHeight:1.45 },
   ph: { fontSize:18, color:'#c0cdd6', textAlign:'center', margin:0, fontStyle:'italic' },
-  errTxt: { color:'#dc2626', fontSize:14, textAlign:'center', margin:0 },
+  errTxt: { color:'#dc2626', fontSize:14, textAlign:'center', margin:'8px 0 0' },
   micBtn: { width:'100%', padding:'18px', borderRadius:14, border:'2px solid #2cb87a', background:'#f0fdf4', color:'#166534', fontSize:20, fontWeight:700, cursor:'pointer', fontFamily:'inherit', transition:'all .2s' },
   micOn: { background:'#fff0f0', borderColor:'#dc2626', color:'#dc2626' },
   row: { display:'flex', gap:12, width:'100%', justifyContent:'center', flexWrap:'wrap' },
@@ -549,7 +562,7 @@ const S: Record<string, React.CSSProperties> = {
   pbBox: { width:'100%', minHeight:180, background:'#f5f3ff', border:'2px solid #ddd6fe', borderRadius:16, padding:'28px 32px', display:'flex', alignItems:'center', justifyContent:'center' },
   pbTxt: { fontSize:34, fontWeight:700, color:'#4c1d95', textAlign:'center', margin:0, lineHeight:1.4 },
   contBtn: { padding:'16px 44px', borderRadius:14, border:'none', background:'linear-gradient(135deg,#5b21b6,#7c3aed)', color:'#fff', fontSize:19, fontWeight:700, cursor:'pointer', fontFamily:'inherit', boxShadow:'0 4px 16px rgba(124,58,237,.4)' },
-  demoBanner: { width:'100%', background:'#fffbeb', border:'1.5px solid #fcd34d', borderRadius:12, padding:'12px 18px', display:'flex', gap:12, alignItems:'flex-start' },
+  demoBanner: { width:'100%', background:'#f0fdf4', border:'1.5px solid #86efac', borderRadius:12, padding:'12px 18px', display:'flex', gap:12, alignItems:'flex-start' },
   footer: { padding:'14px 36px', background:'#fff', borderTop:'1px solid #f3f4f6', display:'flex', justifyContent:'center' },
 };
 

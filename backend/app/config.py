@@ -64,10 +64,10 @@ class Settings(BaseSettings):
     
     # ML
     ML_MODEL_PATH: str = "app/ml/models/lsp_model.h5"
-    ML_DEMO_MODE: bool = True
-    ML_CONFIDENCE_THRESHOLD: float = 0.70
-    ML_SEQUENCE_LENGTH: int = 15
-    ML_FEATURE_DIM: int = 1662
+    ML_DEMO_MODE: bool = False
+    ML_CONFIDENCE_THRESHOLD: float = 0.30
+    ML_SEQUENCE_LENGTH: int = 30
+    ML_FEATURE_DIM: int = 126
     
     # STT
     WHISPER_MODEL_SIZE: str = "base"

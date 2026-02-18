@@ -1,181 +1,73 @@
 """
-Feature extraction from MediaPipe landmarks
-Converts MediaPipe Holistic landmarks to feature vectors for LSTM model
+Feature extraction - CORREGIDO para coincidir con el modelo entrenado
+Extrae exactamente (30, 126) como lo hace 1_grabar_dataset.py
 """
 import numpy as np
-from typing import List, Optional, Dict
-from app.schemas.lsp import LSPFrame, LSPKeypoint
-
-
-# MediaPipe landmark counts
-FACE_LANDMARKS_COUNT = 468
-LEFT_HAND_LANDMARKS_COUNT = 21
-RIGHT_HAND_LANDMARKS_COUNT = 21
-POSE_LANDMARKS_COUNT = 33
-
-# Feature dimensions per landmark (x, y, z, visibility)
-FEATURES_PER_LANDMARK = 4
-
-# Total features per frame (using Holistic)
-# Face: 468 * 4 = 1872 (we'll use subset)
-# Hands: 21 * 4 * 2 = 168
-# Pose: 33 * 4 = 132
-# Total optimized: ~1662 features (configurable)
-
-
-def extract_keypoint_features(keypoint: LSPKeypoint) -> np.ndarray:
-    """
-    Extract features from a single keypoint
-    
-    Args:
-        keypoint: LSPKeypoint object
-        
-    Returns:
-        numpy array [x, y, z, visibility]
-    """
-    return np.array([
-        keypoint.x,
-        keypoint.y,
-        keypoint.z if keypoint.z is not None else 0.0,
-        keypoint.visibility if keypoint.visibility is not None else 1.0
-    ])
-
-
-def extract_landmarks_features(
-    landmarks: Optional[List[LSPKeypoint]],
-    expected_count: int
-) -> np.ndarray:
-    """
-    Extract features from a list of landmarks
-    
-    Args:
-        landmarks: List of LSPKeypoint objects
-        expected_count: Expected number of landmarks
-        
-    Returns:
-        numpy array of shape (expected_count * 4,) with zero-padding if needed
-    """
-    if landmarks is None or len(landmarks) == 0:
-        # Return zero-padded array
-        return np.zeros(expected_count * FEATURES_PER_LANDMARK)
-    
-    # Extract features from each landmark
-    features = []
-    for i in range(expected_count):
-        if i < len(landmarks):
-            features.extend(extract_keypoint_features(landmarks[i]))
-        else:
-            # Zero-pad if fewer landmarks than expected
-            features.extend([0.0, 0.0, 0.0, 0.0])
-    
-    return np.array(features)
+from typing import List
+from app.schemas.lsp import LSPFrame
 
 
 def extract_frame_features(frame: LSPFrame) -> np.ndarray:
     """
-    Extract all features from a single frame
+    Extrae 126 features de un frame (igual que el script de entrenamiento).
+    - Mano izquierda: 21 × 3 (x,y,z) = 63
+    - Mano derecha: 21 × 3 (x,y,z) = 63
+    Total: 126
     
-    For this MVP, we focus on hands and simplified pose
-    Feature vector structure:
-    - Left hand: 21 * 4 = 84
-    - Right hand: 21 * 4 = 84
-    - Pose (selected): 33 * 4 = 132
-    - Face (selected key points): ~50 * 4 = 200
-    Total: ~500 features (can be adjusted)
-    
-    Args:
-        frame: LSPFrame object with landmarks
-        
-    Returns:
-        numpy array of shape (feature_dim,)
+    SIN visibility, SIN pose, SIN face — solo manos x,y,z
     """
-    features = []
+    zeros63 = np.zeros(63)
     
-    # Extract hand features (most important for sign language)
-    left_hand_features = extract_landmarks_features(
-        frame.left_hand_landmarks,
-        LEFT_HAND_LANDMARKS_COUNT
-    )
-    right_hand_features = extract_landmarks_features(
-        frame.right_hand_landmarks,
-        RIGHT_HAND_LANDMARKS_COUNT
-    )
+    # Mano izquierda
+    if frame.left_hand_landmarks and len(frame.left_hand_landmarks) == 21:
+        left = np.array([[lm.x, lm.y, lm.z if lm.z else 0.0] 
+                         for lm in frame.left_hand_landmarks]).flatten()
+    else:
+        left = zeros63
     
-    # Extract pose features
-    pose_features = extract_landmarks_features(
-        frame.pose_landmarks,
-        POSE_LANDMARKS_COUNT
-    )
+    # Mano derecha
+    if frame.right_hand_landmarks and len(frame.right_hand_landmarks) == 21:
+        right = np.array([[lm.x, lm.y, lm.z if lm.z else 0.0] 
+                          for lm in frame.right_hand_landmarks]).flatten()
+    else:
+        right = zeros63
     
-    # For MVP, skip face landmarks (or use subset)
-    # If needed, extract key facial landmarks for expressions
-    # face_features = extract_landmarks_features(
-    #     frame.face_landmarks,
-    #     FACE_LANDMARKS_COUNT  # or subset like 50
-    # )
-    
-    # Combine all features
-    features.extend(left_hand_features)
-    features.extend(right_hand_features)
-    features.extend(pose_features)
-    # features.extend(face_features)  # Optional
-    
-    return np.array(features)
+    return np.concatenate([left, right])  # (126,)
 
 
 def extract_sequence_features(
     frames: List[LSPFrame],
-    sequence_length: int = 15
+    sequence_length: int = 30
 ) -> np.ndarray:
     """
-    Extract features from a sequence of frames
-    
-    Args:
-        frames: List of LSPFrame objects
-        sequence_length: Fixed sequence length (pad or truncate)
-        
-    Returns:
-        numpy array of shape (sequence_length, feature_dim)
+    Extrae features de una secuencia de frames.
+    Salida: (30, 126) — exactamente como el modelo fue entrenado
     """
     features_list = []
     
-    # Extract features from each frame
     for frame in frames[:sequence_length]:
-        frame_features = extract_frame_features(frame)
-        features_list.append(frame_features)
+        frame_feats = extract_frame_features(frame)
+        features_list.append(frame_feats)
     
-    # Convert to numpy array
+    # Stack
     features_array = np.array(features_list)
     
-    # Pad or truncate to fixed sequence length
+    # Pad con ceros si hay menos de 30 frames
     if len(features_array) < sequence_length:
-        # Pad with zeros
-        padding = np.zeros((sequence_length - len(features_array), features_array.shape[1]))
+        last_frame = features_array[-1] if len(features_array) > 0 else np.zeros(126)
+        padding = np.tile(last_frame, (sequence_length - len(features_array), 1))
         features_array = np.vstack([features_array, padding])
-    elif len(features_array) > sequence_length:
-        # Truncate
-        features_array = features_array[:sequence_length]
     
-    return features_array
+    # Truncar si hay más de 30 frames
+    elif len(features_array) > sequence_length:
+        features_array = features_array[-sequence_length:]
+    
+    return features_array  # (30, 126)
 
 
 def calculate_feature_dimension() -> int:
-    """
-    Calculate the total feature dimension per frame
-    
-    Returns:
-        Total feature dimension
-    """
-    dim = 0
-    dim += LEFT_HAND_LANDMARKS_COUNT * FEATURES_PER_LANDMARK  # 84
-    dim += RIGHT_HAND_LANDMARKS_COUNT * FEATURES_PER_LANDMARK  # 84
-    dim += POSE_LANDMARKS_COUNT * FEATURES_PER_LANDMARK  # 132
-    # dim += FACE_SUBSET_COUNT * FEATURES_PER_LANDMARK  # Optional
-    
-    return dim
+    """Dimensión de features: 126 (2 manos × 21 puntos × 3 coords)"""
+    return 126
 
 
-# Calculate feature dimension for config validation
 FEATURE_DIM = calculate_feature_dimension()
-
-print(f"Feature dimension per frame: {FEATURE_DIM}")
