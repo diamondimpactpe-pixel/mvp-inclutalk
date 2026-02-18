@@ -5,11 +5,8 @@ type Turn = 'operator' | 'user-choice' | 'user-signs' | 'user-text' | 'playback'
 type SpeechRecWin = typeof window & { webkitSpeechRecognition?: any; SpeechRecognition?: any };
 
 const LSP_WORDS = [
-  'DNI','CITA','PAGO','RECLAMO','CONSULTA','NOMBRE','FECHA',
-  'VENCIDO','RENOVAR','ESPERAR','FIRMAR','DOCUMENTO','TARJETA',
-  'BANCO','CUENTA','DEPÓSITO','RETIRO','TRÁMITE','CERTIFICADO',
-  'TURNO','NÚMERO','HORA','HOY','DINERO','REGISTRO',
-  'AYUDA','GRACIAS','SÍ','NO','EMERGENCIA',
+  'SABER','COMPRAR','PAGAR','RECIBO','DEVOLVER','CONSULTAR','HORARIO',
+  'ATENCIÓN','RESERVAR','LIBROS',
 ];
 
 function speakText(text: string, onEnd?: () => void) {

@@ -1,0 +1,28 @@
+{
+  "palabras": [
+    "SABER",
+    "COMPRAR",
+    "PAGAR",
+    "RECIBO",
+    "DEVOLVER",
+    "CONSULTAR",
+    "HORARIO",
+    "ATENCIÓN",
+    "RESERVAR",
+    "LIBROS"
+  ],
+  "indice_a_palabra": {
+    "0": "SABER",
+    "1": "COMPRAR",
+    "2": "PAGAR",
+    "3": "RECIBO",
+    "4": "DEVOLVER",
+    "5": "CONSULTAR",
+    "6": "HORARIO",
+    "7": "ATENCIÓN",
+    "8": "RESERVAR",
+    "9": "LIBROS"
+  },
+  "accuracy_validacion": 0.6666666865348816,
+  "total_ejemplos": 300
+}
